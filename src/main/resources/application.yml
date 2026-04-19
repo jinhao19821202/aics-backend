@@ -1,0 +1,171 @@
+server:
+  port: 8080
+  shutdown: graceful
+
+spring:
+  application:
+    name: ai-customer-service
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+  main:
+    allow-bean-definition-overriding: true
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+
+  servlet:
+    multipart:
+      max-file-size: 25MB
+      max-request-size: 30MB
+
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:ai_cs}
+    username: ${POSTGRES_USER:ai_cs}
+    password: ${POSTGRES_PASSWORD:ai_cs_pass}
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 5000
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        jdbc:
+          batch_size: 50
+        order_inserts: true
+        order_updates: true
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 2000ms
+      lettuce:
+        pool:
+          max-active: 16
+          max-idle: 8
+          min-idle: 2
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:29092}
+    producer:
+      acks: all
+      retries: 3
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      properties:
+        linger.ms: 5
+        enable.idempotence: true
+    consumer:
+      group-id: cs-bot-worker
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "com.aics.*"
+        max.poll.records: 10
+    listener:
+      ack-mode: manual_immediate
+      concurrency: 4
+
+app:
+  company-name: ${APP_COMPANY_NAME:示例公司}
+  bot-name: ${APP_BOT_NAME:智能助手}
+  # P004-A F001：租户企微回调 URL 展示用基础域名；空则前端展示占位
+  public-base-url: ${APP_PUBLIC_BASE_URL:}
+
+  wecom:
+    corp-id: ${WECOM_CORP_ID:}
+    agent-id: ${WECOM_AGENT_ID:0}
+    token: ${WECOM_TOKEN:}
+    aes-key: ${WECOM_AES_KEY:}
+    bot-userid: ${WECOM_BOT_USERID:bot_user}
+    secret: ${WECOM_SECRET:}
+    api-base: https://qyapi.weixin.qq.com
+
+  dashscope:
+    api-key: ${DASHSCOPE_API_KEY:}
+    base-url: ${DASHSCOPE_BASE_URL:https://dashscope.aliyuncs.com/api/v1}
+    chat-model: ${QWEN_CHAT_MODEL:qwen-plus}
+    large-model: ${QWEN_LARGE_MODEL:qwen-max}
+    lite-model: ${QWEN_LITE_MODEL:qwen-turbo}
+    embedding-model: ${EMBEDDING_MODEL:text-embedding-v3}
+    embedding-dim: 1024
+    connect-timeout-ms: 3000
+    read-timeout-ms: 12000
+    stream-fallback-timeout-ms: 4000
+
+  milvus:
+    host: ${MILVUS_HOST:localhost}
+    port: ${MILVUS_PORT:19530}
+    collection: ${MILVUS_COLLECTION:kb_chunks}
+
+  minio:
+    endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+    access-key: ${MINIO_ACCESS_KEY:minioadmin}
+    secret-key: ${MINIO_SECRET_KEY:minioadmin}
+    bucket: ${MINIO_BUCKET:ai-cs-kb}
+
+  jwt:
+    secret: ${JWT_SECRET:change_me_to_a_long_random_string_change_me_to_a_long_random_string}
+    expire-hours: ${JWT_EXPIRE_HOURS:8}
+    refresh-days: ${JWT_REFRESH_DAYS:7}
+
+  kafka-topics:
+    inbound: wecom.msg.inbound
+    inbound-dlq: wecom.msg.inbound.dlq
+    triggered: bot.triggered
+    handoff: handoff.signal
+
+  security:
+    master-key: ${AICS_MASTER_KEY:}
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      llmQwen:
+        register-health-indicator: true
+        sliding-window-type: TIME_BASED
+        sliding-window-size: 60
+        minimum-number-of-calls: 10
+        failure-rate-threshold: 50
+        slow-call-duration-threshold: 12s
+        slow-call-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+  retry:
+    instances:
+      dashScopeEmbedding:
+        max-attempts: 3
+        wait-duration: 500ms
+        exponential-backoff-multiplier: 2
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when_authorized
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
+logging:
+  level:
+    root: INFO
+    com.aics: DEBUG
+    org.hibernate.SQL: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{conversationId:-}] %logger{36} - %msg%n"
