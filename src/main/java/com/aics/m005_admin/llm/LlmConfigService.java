@@ -74,6 +74,7 @@ public class LlmConfigService {
         c.setIsDefault(Boolean.TRUE.equals(req.getIsDefault()));
         c.setEnabled(req.getEnabled() == null ? true : req.getEnabled());
         c.setCreatedBy(op == null ? null : op.id());
+        c.setUpdatedAt(OffsetDateTime.now());
 
         if (Boolean.TRUE.equals(c.getIsDefault())) {
             clearDefaultsForPurpose(tenantId, req.getPurpose(), null);
@@ -113,6 +114,7 @@ public class LlmConfigService {
         } else if (Boolean.FALSE.equals(req.getIsDefault()) && Boolean.TRUE.equals(c.getIsDefault())) {
             c.setIsDefault(false);
         }
+        c.setUpdatedAt(OffsetDateTime.now());
 
         c = repo.save(c);
         resolver.evict(tenantId);
@@ -149,6 +151,7 @@ public class LlmConfigService {
             c.setLastTestAt(OffsetDateTime.now());
             c.setLastTestOk(false);
             c.setLastTestMsg(trunc(tr.getMessage(), 400));
+            c.setUpdatedAt(OffsetDateTime.now());
             repo.save(c);
             audit.record(op, "LLM_CONFIG_TEST", "tenant_llm_config", String.valueOf(id),
                     null, Map.of("ok", false, "reason", "decrypt_failed"));
@@ -173,6 +176,7 @@ public class LlmConfigService {
         c.setLastTestAt(OffsetDateTime.now());
         c.setLastTestOk(tr.isOk());
         c.setLastTestMsg(trunc(tr.getMessage(), 400));
+        c.setUpdatedAt(OffsetDateTime.now());
         repo.save(c);
         audit.record(op, "LLM_CONFIG_TEST", "tenant_llm_config", String.valueOf(id),
                 null, Map.of("ok", tr.isOk(), "latencyMs", tr.getLatencyMs()));
@@ -249,6 +253,7 @@ public class LlmConfigService {
             if (excludeId != null && excludeId.equals(r.getId())) continue;
             if (Boolean.TRUE.equals(r.getIsDefault())) {
                 r.setIsDefault(false);
+                r.setUpdatedAt(OffsetDateTime.now());
                 repo.save(r);
             }
         }

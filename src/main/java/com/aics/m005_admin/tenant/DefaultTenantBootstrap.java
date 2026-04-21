@@ -11,6 +11,7 @@ import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 
 /**
@@ -83,6 +84,7 @@ public class DefaultTenantBootstrap implements ApplicationRunner {
         target.setBotUserid(w.getBotUserid());
         target.setApiBase(w.getApiBase());
         target.setEnabled(true);
+        target.setUpdatedAt(OffsetDateTime.now());
         wecomRepo.save(target);
         log.info("DefaultTenantBootstrap: 企微默认租户配置已回填 corpId={} agentId={}", w.getCorpId(), target.getAgentId());
     }
@@ -125,6 +127,7 @@ public class DefaultTenantBootstrap implements ApplicationRunner {
         if (dim != null) target.setEmbeddingDim(dim);
         target.setIsDefault(true);
         target.setEnabled(true);
+        target.setUpdatedAt(OffsetDateTime.now());
         llmRepo.save(target);
         log.info("DefaultTenantBootstrap: LLM 默认租户 purpose={} model={} 配置已回填", purpose, model);
     }

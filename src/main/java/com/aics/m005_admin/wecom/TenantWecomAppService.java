@@ -74,6 +74,7 @@ public class TenantWecomAppService {
         a.setApiBase(blankToNull(req.getApiBase()));
         a.setEnabled(req.getEnabled() == null || req.getEnabled());
         a.setStatus(TenantWecomApp.STATUS_NOT_VERIFIED);
+        a.setUpdatedAt(OffsetDateTime.now());
         a = repo.save(a);
 
         audit.record(op, "WECOM_APP_CREATE", "tenant_wecom_app", String.valueOf(a.getId()),
@@ -104,6 +105,7 @@ public class TenantWecomAppService {
         if (req.getBotUserid() != null) a.setBotUserid(blankToNull(req.getBotUserid()));
         if (req.getApiBase() != null) a.setApiBase(blankToNull(req.getApiBase()));
         if (req.getEnabled() != null) a.setEnabled(req.getEnabled());
+        a.setUpdatedAt(OffsetDateTime.now());
 
         a = repo.save(a);
         audit.record(op, "WECOM_APP_UPDATE", "tenant_wecom_app", String.valueOf(id), before, snapshot(a));
@@ -196,6 +198,7 @@ public class TenantWecomAppService {
             if (TenantWecomApp.STATUS_VERIFIED.equals(a.getStatus())) return;
             a.setStatus(TenantWecomApp.STATUS_VERIFIED);
             a.setVerifiedAt(OffsetDateTime.now());
+            a.setUpdatedAt(OffsetDateTime.now());
             repo.save(a);
             log.info("tenant_wecom_app id={} marked VERIFIED", wecomAppId);
         });
@@ -234,6 +237,7 @@ public class TenantWecomAppService {
         a.setLastTestAt(OffsetDateTime.now());
         a.setLastTestOk(tr.isOk());
         a.setLastTestMsg(trunc(tr.getMessage(), 400));
+        a.setUpdatedAt(OffsetDateTime.now());
         repo.save(a);
     }
 
