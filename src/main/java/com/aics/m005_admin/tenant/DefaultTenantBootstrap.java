@@ -75,6 +75,10 @@ public class DefaultTenantBootstrap implements ApplicationRunner {
             }
             target = new TenantWecomApp();
             target.setTenantId(DEFAULT_TENANT);
+            target.setName("默认应用");
+        }
+        if (isBlank(target.getName())) {
+            target.setName("默认应用");
         }
         target.setCorpId(w.getCorpId());
         target.setAgentId(w.getAgentId() == null ? 0 : w.getAgentId());
