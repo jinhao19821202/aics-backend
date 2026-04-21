@@ -8,6 +8,8 @@ import com.aics.infra.wecom.WeComMessageParser;
 import com.aics.m001_message.domain.WeComMessage;
 import com.aics.m001_message.domain.WeComMessageRepository;
 import com.aics.m001_message.dto.InboundEnvelope;
+import com.aics.m001_message.logging.WeComCallbackLogger;
+import com.aics.m001_message.logging.WeComCallbackLogger.Context;
 import com.aics.m001_message.service.IdempotencyService;
 import com.aics.m005_admin.tenant.TenantWecomAppResolver;
 import com.aics.m005_admin.wecom.TenantWecomAppService;
@@ -27,6 +29,11 @@ import java.util.UUID;
  * 取租户级 token/aes_key/secret 解密；不再读 app.wecom.*（仅作默认租户兜底）。
  * 路径 /wecom/callback（保留兼容）— 使用 DEFAULT_TENANT + AppProperties。
  * 必须 ≤ 500ms，所有业务在 Worker 异步处理。
+ *
+ * P005 F001：成功 / 失败 / 忽略路径全部走 WeComCallbackLogger 打结构化日志，
+ * 便于线上 grep tenantId/wecomAppId/msgId/chatId 排障。
+ * P005 F002：handleDecrypted 落库同时写入密文字段（encrypted_payload / msg_signature /
+ * timestamp_str / nonce / wecom_app_id / verify_status）。
  */
 @Slf4j
 @RestController
@@ -41,6 +48,7 @@ public class WeComCallbackController {
     private final KafkaTemplate<String, Object> kafka;
     private final AppProperties props;
     private final TenantWecomAppResolver tenantResolver;
+    private final WeComCallbackLogger callbackLogger;
     /** P004-A F001：用 ObjectProvider 避免与 TenantWecomAppService 之间的循环依赖初始化问题。 */
     private final ObjectProvider<TenantWecomAppService> wecomAppServiceProvider;
 
@@ -52,9 +60,25 @@ public class WeComCallbackController {
                                                @RequestParam String timestamp,
                                                @RequestParam String nonce,
                                                @RequestParam String echostr) {
-        TenantWecomAppResolver.Resolved r = tenantResolver.resolveByTenantCode(tenantCode);
+        long t0 = System.currentTimeMillis();
+        TenantWecomAppResolver.Resolved r;
+        try {
+            r = tenantResolver.resolveByTenantCode(tenantCode);
+        } catch (BizException e) {
+            callbackLogger.logReject(
+                    Context.ofVerify(null, null, tenantCode, null),
+                    e.getMessage(), System.currentTimeMillis() - t0);
+            throw e;
+        }
         TenantContext.set(r.tenantId());
-        String echo = doVerify(r, sig, timestamp, nonce, echostr);
+        Context ctx = Context.ofVerify(r.tenantId(), r.app().getId(), tenantCode, r.app().getCorpId());
+        String echo;
+        try {
+            echo = doVerify(r, sig, timestamp, nonce, echostr);
+        } catch (BizException e) {
+            callbackLogger.logReject(ctx, e.getMessage(), System.currentTimeMillis() - t0);
+            throw e;
+        }
         // P004-A F001：首次验签通过 → 写 status=VERIFIED
         TenantWecomAppService svc = wecomAppServiceProvider.getIfAvailable();
         if (svc != null) {
@@ -64,6 +88,7 @@ public class WeComCallbackController {
                 log.warn("markVerified failed for wecomAppId={}: {}", r.app().getId(), e.getMessage());
             }
         }
+        callbackLogger.logOk(ctx, System.currentTimeMillis() - t0);
         return ResponseEntity.ok(echo);
     }
 
@@ -73,9 +98,25 @@ public class WeComCallbackController {
                                                 @RequestParam String timestamp,
                                                 @RequestParam String nonce,
                                                 @RequestBody String body) {
-        TenantWecomAppResolver.Resolved r = tenantResolver.resolveByTenantCode(tenantCode);
+        long t0 = System.currentTimeMillis();
+        TenantWecomAppResolver.Resolved r;
+        try {
+            r = tenantResolver.resolveByTenantCode(tenantCode);
+        } catch (BizException e) {
+            callbackLogger.logReject(
+                    Context.ofReceive(null, null, tenantCode, null),
+                    e.getMessage(), System.currentTimeMillis() - t0);
+            throw e;
+        }
         TenantContext.set(r.tenantId());
-        return ResponseEntity.ok(doReceive(r, sig, timestamp, nonce, body));
+        Context ctx = Context.ofReceive(r.tenantId(), r.app().getId(), tenantCode, r.app().getCorpId());
+        try {
+            String ack = doReceive(ctx, r, sig, timestamp, nonce, body, t0);
+            return ResponseEntity.ok(ack);
+        } catch (BizException e) {
+            callbackLogger.logReject(ctx, e.getMessage(), System.currentTimeMillis() - t0);
+            throw e;
+        }
     }
 
     // ---- 默认租户兼容入口（M1 过渡）----
@@ -85,14 +126,22 @@ public class WeComCallbackController {
                                          @RequestParam String timestamp,
                                          @RequestParam String nonce,
                                          @RequestParam String echostr) {
+        long t0 = System.currentTimeMillis();
         TenantContext.set(TenantContext.DEFAULT_TENANT_ID);
-        crypto.verify(timestamp, nonce, echostr, sig);
-        WeComCrypto.DecryptResult r = crypto.decrypt(echostr);
         String expected = props.getWecom().getCorpId();
-        if (expected != null && !expected.isBlank() && !expected.equals(r.receivedCorpId())) {
-            throw new BizException(401, "corpid mismatch");
+        Context ctx = Context.ofVerify(TenantContext.DEFAULT_TENANT_ID, null, "default", expected);
+        try {
+            crypto.verify(timestamp, nonce, echostr, sig);
+            WeComCrypto.DecryptResult r = crypto.decrypt(echostr);
+            if (expected != null && !expected.isBlank() && !expected.equals(r.receivedCorpId())) {
+                throw new BizException(401, "corpid mismatch");
+            }
+            callbackLogger.logOk(ctx, System.currentTimeMillis() - t0);
+            return ResponseEntity.ok(r.plainXml());
+        } catch (BizException e) {
+            callbackLogger.logReject(ctx, e.getMessage(), System.currentTimeMillis() - t0);
+            throw e;
         }
-        return ResponseEntity.ok(r.plainXml());
     }
 
     @PostMapping(consumes = MediaType.APPLICATION_XML_VALUE, produces = MediaType.TEXT_PLAIN_VALUE)
@@ -100,8 +149,17 @@ public class WeComCallbackController {
                                           @RequestParam String timestamp,
                                           @RequestParam String nonce,
                                           @RequestBody String body) {
+        long t0 = System.currentTimeMillis();
         TenantContext.set(TenantContext.DEFAULT_TENANT_ID);
-        return ResponseEntity.ok(doReceiveDefault(sig, timestamp, nonce, body));
+        String expected = props.getWecom().getCorpId();
+        Context ctx = Context.ofReceive(TenantContext.DEFAULT_TENANT_ID, null, "default", expected);
+        try {
+            String ack = doReceiveDefault(ctx, sig, timestamp, nonce, body, t0);
+            return ResponseEntity.ok(ack);
+        } catch (BizException e) {
+            callbackLogger.logReject(ctx, e.getMessage(), System.currentTimeMillis() - t0);
+            throw e;
+        }
     }
 
     // ---- 共用实现 ----
@@ -115,7 +173,8 @@ public class WeComCallbackController {
         return dec.plainXml();
     }
 
-    private String doReceive(TenantWecomAppResolver.Resolved r, String sig, String timestamp, String nonce, String body) {
+    private String doReceive(Context ctx, TenantWecomAppResolver.Resolved r,
+                             String sig, String timestamp, String nonce, String body, long t0) {
         String encrypted = parser.parseEncrypt(body);
         if (encrypted == null) throw new BizException(400, "invalid payload");
 
@@ -124,10 +183,11 @@ public class WeComCallbackController {
         if (!r.app().getCorpId().equals(dec.receivedCorpId())) {
             throw new BizException(401, "corpid mismatch");
         }
-        return handleDecrypted(r.tenantId(), r.app().getCsAgentId(), dec);
+        return handleDecrypted(ctx, r.tenantId(), r.app().getId(), r.app().getCsAgentId(),
+                dec, encrypted, sig, timestamp, nonce, t0);
     }
 
-    private String doReceiveDefault(String sig, String timestamp, String nonce, String body) {
+    private String doReceiveDefault(Context ctx, String sig, String timestamp, String nonce, String body, long t0) {
         String encrypted = parser.parseEncrypt(body);
         if (encrypted == null) throw new BizException(400, "invalid payload");
 
@@ -137,18 +197,29 @@ public class WeComCallbackController {
         if (expected != null && !expected.isBlank() && !expected.equals(dec.receivedCorpId())) {
             throw new BizException(401, "corpid mismatch");
         }
-        // 默认租户兼容路径：无 wecomApp 实体，csAgentId=null（走租户默认流程）。
-        return handleDecrypted(TenantContext.DEFAULT_TENANT_ID, null, dec);
+        // 默认租户兼容路径：无 wecomApp 实体，wecomAppId=null，csAgentId=null（走租户默认流程）。
+        return handleDecrypted(ctx, TenantContext.DEFAULT_TENANT_ID, null, null,
+                dec, encrypted, sig, timestamp, nonce, t0);
     }
 
-    private String handleDecrypted(Long tenantId, Long csAgentId, WeComCrypto.DecryptResult r) {
+    /**
+     * P005 F002：落库同时保留密文（encrypted_payload / msg_signature / timestamp / nonce）。
+     * 当前走"简化方案"——只在验签+解密都成功后一次性写入；失败分支不入库。
+     */
+    private String handleDecrypted(Context baseCtx, Long tenantId, Long wecomAppId, Long csAgentId,
+                                   WeComCrypto.DecryptResult r, String encryptedPayload,
+                                   String sig, String timestamp, String nonce, long t0) {
         WeComMessageParser.Parsed p = parser.parse(r.plainXml());
+        Context ctx = baseCtx.withMessage(
+                p.getMsgType(), p.getMsgId(), p.getChatId(), p.getFromUsername(),
+                p.getContent() == null ? null : p.getContent().length());
+
         if (p.getMsgId() == null || p.getChatId() == null) {
-            log.info("ignore non-group or missing msgid: type={}", p.getMsgType());
+            callbackLogger.logIgnore(ctx, "non-group or missing msgid");
             return "success";
         }
         if (!idem.firstSeen(p.getMsgId())) {
-            log.debug("dedup hit: {}", p.getMsgId());
+            callbackLogger.logIgnore(ctx, "dedup hit");
             return "success";
         }
 
@@ -163,6 +234,12 @@ public class WeComCallbackController {
                 m.setContent(p.getContent());
                 m.setMentionedList(p.getMentionedList());
                 m.setRaw(r.plainXml());
+                m.setEncryptedPayload(encryptedPayload);
+                m.setMsgSignature(sig);
+                m.setTimestampStr(timestamp);
+                m.setNonce(nonce);
+                m.setWecomAppId(wecomAppId);
+                m.setVerifyStatus(WeComMessage.VERIFY_VERIFIED);
                 msgRepo.save(m);
             }
         } catch (Exception e) {
@@ -182,6 +259,7 @@ public class WeComCallbackController {
         env.setCsAgentId(csAgentId);
 
         kafka.send(props.getKafkaTopics().getInbound(), p.getChatId(), env);
+        callbackLogger.logOk(ctx, System.currentTimeMillis() - t0);
         return "success";
     }
 }

@@ -29,6 +29,8 @@ public class AppProperties {
         private String botUserid;
         private String secret;
         private String apiBase;
+        /** P005 F004：wecom_message 保留天数；0 或负值 = 永不清理。 */
+        private int messageRetentionDays = 30;
     }
 
     @Data
