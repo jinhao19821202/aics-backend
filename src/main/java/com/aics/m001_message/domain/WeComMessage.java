@@ -22,7 +22,8 @@ public class WeComMessage {
     @Column(name = "msg_id", nullable = false)
     private String msgId;
 
-    @Column(name = "group_id", nullable = false)
+    /** 群聊场景为 ChatId；直聊（1:1）场景为 NULL。 */
+    @Column(name = "group_id")
     private String groupId;
 
     @Column(name = "from_userid")

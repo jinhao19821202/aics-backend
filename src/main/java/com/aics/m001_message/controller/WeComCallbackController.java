@@ -218,8 +218,8 @@ public class WeComCallbackController {
                 p.getMsgType(), p.getMsgId(), p.getChatId(), p.getFromUsername(),
                 p.getContent() == null ? null : p.getContent().length());
 
-        if (p.getMsgId() == null || p.getChatId() == null) {
-            callbackLogger.logIgnore(ctx, "non-group or missing msgid");
+        if (p.getMsgId() == null) {
+            callbackLogger.logIgnore(ctx, "missing msgid");
             return "success";
         }
         if (!idem.firstSeen(p.getMsgId())) {
@@ -248,6 +248,12 @@ public class WeComCallbackController {
             }
         } catch (Exception e) {
             log.warn("fast-persist wecom_message failed (will continue to Kafka): {}", e.getMessage());
+        }
+
+        // 直聊（1:1）消息仅做审计留痕，不走群聊 Kafka 流水线。
+        if (p.getChatId() == null) {
+            callbackLogger.logIgnore(ctx, "direct-chat persisted (no kafka dispatch)");
+            return "success";
         }
 
         InboundEnvelope env = new InboundEnvelope();
