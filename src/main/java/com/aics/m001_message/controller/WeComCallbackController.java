@@ -92,7 +92,9 @@ public class WeComCallbackController {
         return ResponseEntity.ok(echo);
     }
 
-    @PostMapping(value = "/{tenantCode}", consumes = MediaType.APPLICATION_XML_VALUE, produces = MediaType.TEXT_PLAIN_VALUE)
+    @PostMapping(value = "/{tenantCode}",
+            consumes = {MediaType.APPLICATION_XML_VALUE, MediaType.TEXT_XML_VALUE},
+            produces = MediaType.TEXT_PLAIN_VALUE)
     public ResponseEntity<String> receiveTenant(@PathVariable String tenantCode,
                                                 @RequestParam("msg_signature") String sig,
                                                 @RequestParam String timestamp,
@@ -144,7 +146,9 @@ public class WeComCallbackController {
         }
     }
 
-    @PostMapping(consumes = MediaType.APPLICATION_XML_VALUE, produces = MediaType.TEXT_PLAIN_VALUE)
+    @PostMapping(
+            consumes = {MediaType.APPLICATION_XML_VALUE, MediaType.TEXT_XML_VALUE},
+            produces = MediaType.TEXT_PLAIN_VALUE)
     public ResponseEntity<String> receive(@RequestParam("msg_signature") String sig,
                                           @RequestParam String timestamp,
                                           @RequestParam String nonce,
